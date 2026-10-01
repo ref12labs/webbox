@@ -134,18 +134,34 @@ async function ring(p, command, extra) {
   const msg = Object.assign({ t: command, ts: Date.now(), n: b64u(crypto.getRandomValues(new Uint8Array(12))) }, extra || {});
   const body = await encrypt(unb64u(p.k), unb64u(p.a), JSON.stringify(msg));
   const r = await fetch(p.e, { method: 'POST', body, headers: { 'Content-Encoding': 'aes128gcm', 'TTL': '300', 'Urgency': 'high', 'Content-Type': 'application/octet-stream', 'Authorization': await vapid(p.e, p.d) } });
+  if (r.status === 404 || r.status === 410) throw new Error('This pairing no longer exists on hexad (it was removed there). Forget it below and pair again from hexad.');
   if (!r.ok) throw new Error('The push service refused the message (' + r.status + '): ' + (await r.text()).slice(0, 160));
 }
 
 // ---------- this device's own subscription, one service worker registration per pairing ----------
 const scopeOf = p => new URL('p/' + p.id + '/', location.href).href;
 async function registration(p) { return navigator.serviceWorker.register('sw.js', { scope: scopeOf(p) }); }
+// The pairing's worker, once active. (navigator.serviceWorker.ready would wait forever: it only resolves for a worker
+// whose scope covers this page, and each pairing's worker has a narrower scope of its own.)
+async function activeRegistration(p) {
+  const reg = await registration(p);
+  if (reg.active) return reg;
+  const sw = reg.installing || reg.waiting;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('The notification worker did not start; reload the page and try again.')), 15000);
+    if (!sw) { clearTimeout(timer); return resolve(); }
+    sw.addEventListener('statechange', () => {
+      if (sw.state === 'activated') { clearTimeout(timer); resolve(); }
+      if (sw.state === 'redundant') { clearTimeout(timer); reject(new Error('The notification worker failed to install.')); }
+    });
+  });
+  return reg;
+}
 async function enable(p) {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error(isIos() && !standalone() ? 'Add this page to the home screen and open it from there: iOS only allows notifications for installed web apps.' : 'This browser does not support push notifications.');
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') throw new Error('Notifications are blocked for this page; allow them in the browser settings and try again.');
-  const reg = await registration(p);
-  await navigator.serviceWorker.ready;
+  const reg = await activeRegistration(p);
   let sub = await reg.pushManager.getSubscription();
   const want = b64u(unb64u(p.s));
   if (sub && sub.options && sub.options.applicationServerKey && b64u(sub.options.applicationServerKey) !== want) { await sub.unsubscribe(); sub = null; }
@@ -199,7 +215,9 @@ function render() {
   $('ios-hint').hidden = !(isIos() && !standalone());
   $('unpaired').hidden = !!p;
   $('enable').hidden = !p || !!p.enabled;
-  $('paired').hidden = $('manage').hidden = !p || !p.enabled;
+  $('paired').hidden = !p || !p.enabled;
+  // Forgetting is offered as soon as there is a pairing, so a stale one can be cleared before it was ever enabled.
+  $('manage').hidden = !p;
   $('who').textContent = p ? p.h : 'not paired';
   $('pick').hidden = all.length < 2;
   $('pick').innerHTML = all.map(x => '<option value="' + x.id + '"' + (p && x.id === p.id ? ' selected' : '') + '></option>').join('');
