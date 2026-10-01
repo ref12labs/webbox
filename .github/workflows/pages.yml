@@ -1,6 +1,7 @@
 name: Deploy to GitHub Pages
 
 # Every app in this repository is static: each folder is published as it is, no build step.
+# hexad's remote app lives in the hexad repository (web/remote) and is published here at /hexad/.
 on:
   push:
     branches: [main]
@@ -23,11 +24,22 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # Read-only deploy key on Ref12/hexad; the branch is the repository variable HEXAD_REF (default fable).
+      - uses: actions/checkout@v4
+        with:
+          repository: Ref12/hexad
+          ref: ${{ vars.HEXAD_REF || 'fable' }}
+          ssh-key: ${{ secrets.HEXAD_DEPLOY_KEY }}
+          path: _hexad
+          sparse-checkout: web/remote
+          sparse-checkout-cone-mode: false
       - uses: actions/configure-pages@v5
       - name: Stage the site
         run: |
           mkdir -p _site
-          rsync -a --exclude '.git' --exclude '.github' --exclude '_site' --exclude 'README.md' ./ _site/
+          rsync -a --exclude '.git' --exclude '.github' --exclude '_site' --exclude '_hexad' --exclude 'README.md' ./ _site/
+          mkdir -p _site/hexad
+          rsync -a --delete --exclude 'README.md' _hexad/web/remote/ _site/hexad/
           touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
