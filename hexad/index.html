@@ -45,6 +45,12 @@
   .scanner .frame { position:absolute; width:min(70vw, 340px); aspect-ratio:1; border:3px solid rgba(255,255,255,.85); border-radius:16px; pointer-events:none; }
   .scanner p { color:#e6e8ec; text-align:center; max-width:420px; }
   .scanner button { max-width:520px; }
+  .viewer { position:fixed; inset:0; z-index:20; background:var(--bg); display:flex; flex-direction:column; }
+  .viewer .bar { display:flex; align-items:center; gap:8px; padding:max(6px, env(safe-area-inset-top)) 8px 6px; border-bottom:1px solid var(--line); background:var(--panel); }
+  .viewer .bar span { flex:1; font-weight:600; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .viewer .bar button { width:auto; margin:0; padding:6px 12px; font-size:18px; line-height:1; }
+  .viewer iframe { flex:1; width:100%; border:0; background:var(--bg); }
+  .viewer .signin { position:absolute; inset:52px 0 0; background:var(--bg); padding:24px 20px; max-width:520px; margin:0 auto; }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -62,6 +68,17 @@
     <button class="primary" data-act="scan">Scan pairing code</button>
     <details><summary class="muted">Or paste the pairing link</summary><div class="row"><input id="paste-link" type="url" placeholder="https://…#pair=…" autocomplete="off"><button data-act="paste" style="flex:none;width:auto">Pair</button></div></details>
     <p class="muted" id="pair-note"></p>
+  </section>
+
+  <section class="viewer" id="viewer" hidden>
+    <div class="bar"><button id="v-back" aria-label="Back">‹</button><span id="v-title">hexad</span><button id="v-browser" title="Open in the browser">↗</button></div>
+    <iframe id="v-frame" title="hexad" allow="clipboard-read; clipboard-write; camera; microphone"></iframe>
+    <div class="signin" id="v-signin" hidden>
+      <h2>Sign in to hexad's tunnel once</h2>
+      <p>The tunnel asks for a GitHub sign-in, and GitHub does not allow signing in inside an app's frame. Sign in once in the browser, then come back here; after that hexad opens inside the app.</p>
+      <button class="primary" id="v-signin-go">Sign in in the browser</button>
+      <button id="v-signin-retry">I have signed in, try again</button>
+    </div>
   </section>
 
   <section class="scanner" id="scanner" hidden>
@@ -196,6 +213,7 @@ let waitingFor = null;   // 'open' while a link is expected; the page goes there
 function show(msg) {
   const p = store.current();
   if (!p || (msg.device && msg.device !== p.id)) return;
+  if (msg.t === 'frame') { if (msg.url) showHexad(msg.url); return; }
   $('log-card').hidden = false;
   const line = document.createElement('div');
   line.innerHTML = '<b></b> <span></span>';
@@ -205,8 +223,8 @@ function show(msg) {
   if (msg.t === 'code') { $('code').textContent = msg.code; $('code-card').hidden = false; $('btn-code').onclick = () => window.open(msg.verify, '_blank'); setState('warn', 'Waiting for the tunnel sign-in'); }
   else if (msg.t === 'url') {
     $('code-card').hidden = true; setState('ok', 'Open');
-    if (waitingFor === 'open' && document.visibilityState === 'visible') { waitingFor = null; location.href = msg.url; }
-    else $('open-note').innerHTML = '<a href="' + msg.url + '">Go to hexad</a>';
+    if (waitingFor === 'open' && document.visibilityState === 'visible') { waitingFor = null; showHexad(msg.url); }
+    else { $('open-note').innerHTML = '<a href="#">Show hexad</a>'; $('open-note').querySelector('a').onclick = e => { e.preventDefault(); showHexad(msg.url); }; }
   }
   else if (msg.t === 'closed') setState('', 'Tunnel closed');
   else if (msg.t === 'error') { setState('err', msg.body || 'Hexad could not do that'); waitingFor = null; }
@@ -241,6 +259,35 @@ function render() {
   $('pick').innerHTML = all.map(x => '<option value="' + x.id + '"' + (p && x.id === p.id ? ' selected' : '') + '></option>').join('');
   [...$('pick').options].forEach((o, i) => o.textContent = all[i].h);
 }
+
+// ---------- hexad inside the app ----------
+// The frame shows hexad through its tunnel. Hexad posts 'hexad-ready' from inside once it loads; without it within ten
+// seconds, the frame is showing the tunnel's sign-in, which GitHub will not complete in a frame, so the page offers a
+// one-time sign-in in the browser. Hexad also posts 'hexad-reopen' when its tunnel drops.
+let viewer = { url: null, timer: null, ready: false };
+function showHexad(url) {
+  const p = store.current();
+  viewer = { url, timer: null, ready: false };
+  store.update(p.id, { lastUrl: url });
+  $('v-title').textContent = p ? p.h : 'hexad';
+  $('v-signin').hidden = true;
+  $('viewer').hidden = false;
+  $('v-frame').src = url;
+  clearTimeout(viewer.timer);
+  viewer.timer = setTimeout(() => { if (!viewer.ready) $('v-signin').hidden = false; }, 10000);
+}
+function hideHexad() { $('viewer').hidden = true; $('v-frame').src = 'about:blank'; clearTimeout(viewer.timer); }
+window.addEventListener('message', e => {
+  if (!viewer.url || e.origin !== new URL(viewer.url).origin || !e.data || typeof e.data !== 'object') return;
+  if (e.data.type === 'hexad-ready') { viewer.ready = true; clearTimeout(viewer.timer); $('v-signin').hidden = true; }
+  if (e.data.type === 'hexad-reopen') { hideHexad(); send('open', { session: e.data.session || undefined }, 'Reopening hexad…'); }
+});
+$('v-back').onclick = hideHexad;
+$('v-browser').onclick = () => window.open(viewer.url, '_blank');
+$('v-signin-go').onclick = () => window.open(viewer.url, '_blank');
+$('v-signin-retry').onclick = () => showHexad(viewer.url);
+// Back from signing in in the browser: try the frame again.
+window.addEventListener('focus', () => { if (!$('viewer').hidden && !viewer.ready && !$('v-signin').hidden) showHexad(viewer.url); });
 
 // ---------- pairing intake: from the address bar, the scanner or a pasted link ----------
 function acceptPairing(link) {
@@ -300,7 +347,9 @@ async function scan() {
   }
   const openSession = location.hash.startsWith('#open=') ? decodeURIComponent(location.hash.slice(6)) : null;
   const showCode = location.hash === '#code';
-  if (openSession || showCode) history.replaceState(null, '', location.pathname);
+  const frameUrl = location.hash.startsWith('#frame=') ? decodeURIComponent(location.hash.slice(7)) : null;
+  if (openSession || showCode || frameUrl) history.replaceState(null, '', location.pathname);
+  if (frameUrl && /^https:\/\/[a-z0-9.-]+\.devtunnels\.ms\//.test(frameUrl) && store.current() && store.current().enabled) showHexad(frameUrl);
   render();
   const p = store.current();
   if (p && p.enabled) {

@@ -31,11 +31,16 @@ self.addEventListener('push', event => {
 self.addEventListener('notificationclick', event => {
   event.notification.close();
   const msg = event.notification.data || {};
-  // A link goes where it says; anything else (a status, a device code) opens the page, which shows it.
-  const target = msg.t === 'code' ? new URL('../../#code', self.registration.scope).href
-    : msg.url || new URL('../../', self.registration.scope).href;
+  // A link to hexad's tunnel opens inside the app, which frames it; anything else (a status, a device code) opens the app.
+  const app = new URL('../../', self.registration.scope).href;
+  const target = msg.t === 'code' ? app + '#code'
+    : msg.url && /^https:\/\/[a-z0-9.-]+\.devtunnels\.ms\//.test(msg.url) ? app + '#frame=' + encodeURIComponent(msg.url)
+    : msg.url || app;
   event.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    // The app already open: bring it forward and have it show the link, rather than opening a second window.
+    const open = wins.find(w => w.url.startsWith(app));
+    if (open && target.startsWith(app + '#frame=')) { await open.focus(); new BroadcastChannel('hexad').postMessage({ t: 'frame', url: msg.url, device: msg.device }); return; }
     const same = wins.find(w => w.url === target);
     if (same) return same.focus();
     return self.clients.openWindow(target);
