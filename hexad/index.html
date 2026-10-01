@@ -38,6 +38,13 @@
   .log div { padding:5px 0; border-top:1px solid var(--line); }
   .log b { color:var(--text); font-weight:600; }
   select { font:inherit; width:100%; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel); color:var(--text); }
+  input[type=url] { font:inherit; flex:1; min-width:0; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel); color:var(--text); }
+  details { margin-top:8px; } summary { cursor:pointer; padding:6px 0; }
+  .scanner { position:fixed; inset:0; background:#000; z-index:10; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:16px; }
+  .scanner video { width:100%; max-width:520px; max-height:70vh; object-fit:cover; border-radius:12px; }
+  .scanner .frame { position:absolute; width:min(70vw, 340px); aspect-ratio:1; border:3px solid rgba(255,255,255,.85); border-radius:16px; pointer-events:none; }
+  .scanner p { color:#e6e8ec; text-align:center; max-width:420px; }
+  .scanner button { max-width:520px; }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -48,10 +55,20 @@
   <section class="card" id="unpaired">
     <h2>Pair this device</h2>
     <ol>
+      <li id="ios-hint" hidden>On an iPhone or iPad, first tap Share, then <b>Add to Home Screen</b>, and open hexad from the home screen: iOS only delivers notifications to installed web apps, and the installed app keeps its own pairings.</li>
       <li>On the computer running hexad, open <b>Settings, Remote</b> and choose <b>Pair a device</b>.</li>
-      <li>Scan the code with this device's camera and open the link.</li>
-      <li id="ios-hint" hidden>On an iPhone or iPad: tap Share, then <b>Add to Home Screen</b>, and open hexad from the home screen. iOS only delivers notifications to installed web apps.</li>
+      <li>Scan the code here:</li>
     </ol>
+    <button class="primary" data-act="scan">Scan pairing code</button>
+    <details><summary class="muted">Or paste the pairing link</summary><div class="row"><input id="paste-link" type="url" placeholder="https://…#pair=…" autocomplete="off"><button data-act="paste" style="flex:none;width:auto">Pair</button></div></details>
+    <p class="muted" id="pair-note"></p>
+  </section>
+
+  <section class="scanner" id="scanner" hidden>
+    <video id="scan-video" playsinline muted></video>
+    <div class="frame"></div>
+    <p id="scan-note">Point the camera at the code on hexad's Settings, Remote page.</p>
+    <button id="scan-cancel">Cancel</button>
   </section>
 
   <section class="card" id="enable" hidden>
@@ -83,6 +100,7 @@
   </section>
 
   <section class="card" id="manage" hidden>
+    <button data-act="scan">Pair with another hexad</button>
     <button id="btn-forget">Forget this pairing</button>
     <p class="muted">Forgetting stops this device ringing hexad. Remove it from hexad's Settings too.</p>
   </section>
@@ -224,14 +242,60 @@ function render() {
   [...$('pick').options].forEach((o, i) => o.textContent = all[i].h);
 }
 
+// ---------- pairing intake: from the address bar, the scanner or a pasted link ----------
+function acceptPairing(link) {
+  const i = link.indexOf('#pair=');
+  if (i < 0) throw new Error('That is not a hexad pairing code.');
+  const d = JSON.parse(new TextDecoder().decode(unb64u(link.slice(i + 6).trim())));
+  if (!d.id || !d.e || !d.k || !d.a || !d.d || !d.s) throw new Error('This pairing code is incomplete; pair again from hexad.');
+  store.put({ id: d.id, h: d.h, e: d.e, k: d.k, a: d.a, d: d.d, s: d.s, pairedAt: Date.now(), enabled: false });
+  render();
+  return d.h;
+}
+
+let scanning = null;
+async function scan() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('This browser cannot use the camera; paste the pairing link instead.');
+  const video = $('scan-video');
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+  $('scanner').hidden = false;
+  video.srcObject = stream;
+  await video.play();
+  // The browser's own detector where it has one (Chrome on Android); jsQR, loaded on demand, everywhere else.
+  let detect;
+  if ('BarcodeDetector' in window && (await BarcodeDetector.getSupportedFormats()).includes('qr_code')) {
+    const detector = new BarcodeDetector({ formats: ['qr_code'] });
+    detect = async () => { const codes = await detector.detect(video); return codes.length ? codes[0].rawValue : null; };
+  } else {
+    if (!window.jsQR) await new Promise((resolve, reject) => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js'; s.onload = resolve; s.onerror = () => reject(new Error('The QR reader could not be loaded; paste the pairing link instead.')); document.head.appendChild(s); });
+    const canvas = document.createElement('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
+    detect = async () => {
+      if (!video.videoWidth) return null;
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+      const code = window.jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts: 'dontInvert' });
+      return code ? code.data : null;
+    };
+  }
+  return new Promise((resolve, reject) => {
+    const stop = () => { clearInterval(scanning.timer); stream.getTracks().forEach(t => t.stop()); video.srcObject = null; $('scanner').hidden = true; scanning = null; };
+    scanning = { stop: () => { stop(); resolve(null); } };
+    scanning.timer = setInterval(async () => {
+      let text;
+      try { text = await detect(); } catch { return; }
+      if (!text) return;
+      if (!text.includes('#pair=')) { $('scan-note').textContent = 'That code is not a hexad pairing code.'; return; }
+      stop();
+      try { resolve(acceptPairing(text)); } catch (err) { reject(err); }
+    }, 250);
+  });
+}
+
 // ---------- start ----------
 (async () => {
   // A pairing link: keep its keys on this device and take them out of the address bar and history.
   if (location.hash.startsWith('#pair=')) {
-    try {
-      const d = JSON.parse(new TextDecoder().decode(unb64u(location.hash.slice(6))));
-      store.put({ id: d.id, h: d.h, e: d.e, k: d.k, a: d.a, d: d.d, s: d.s, pairedAt: Date.now(), enabled: false });
-    } catch { alert('This pairing link is damaged; pair again from hexad.'); }
+    try { acceptPairing(location.hash); } catch (err) { alert(err.message); }
     history.replaceState(null, '', location.pathname);
   }
   const openSession = location.hash.startsWith('#open=') ? decodeURIComponent(location.hash.slice(6)) : null;
@@ -261,6 +325,15 @@ $('btn-status').onclick = () => send('status', null, 'Asking hexad…');
 $('btn-close').onclick = () => send('close', null, 'Closing the tunnel…');
 $('btn-ping').onclick = () => send('ping', null, 'Ringing…');
 $('pick').onchange = e => { store.select(e.target.value); render(); };
+document.addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]'); if (!b) return;
+  $('pair-note').textContent = '';
+  try {
+    if (b.dataset.act === 'scan') { const h = await scan(); if (h) $('enable-note').textContent = 'Paired with ' + h + '. Tap Enable to finish.'; }
+    if (b.dataset.act === 'paste') { const h = acceptPairing($('paste-link').value); $('paste-link').value = ''; $('enable-note').textContent = 'Paired with ' + h + '. Tap Enable to finish.'; }
+  } catch (err) { $('pair-note').textContent = err.name === 'NotAllowedError' ? 'Camera access was refused; allow it in the app settings, or paste the link.' : err.message; if (!store.current()) render(); }
+});
+$('scan-cancel').onclick = () => { if (scanning) scanning.stop(); };
 $('btn-forget').onclick = async () => {
   const p = store.current(); if (!p || !confirm('Forget the pairing with ' + p.h + '?')) return;
   try { const reg = await navigator.serviceWorker.getRegistration(scopeOf(p)); if (reg) { const s = await reg.pushManager.getSubscription(); if (s) await s.unsubscribe(); await reg.unregister(); } } catch { }
