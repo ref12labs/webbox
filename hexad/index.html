@@ -46,11 +46,9 @@
   .scanner p { color:#e6e8ec; text-align:center; max-width:420px; }
   .scanner button { max-width:520px; }
   .viewer { position:fixed; inset:0; z-index:20; background:var(--bg); display:flex; flex-direction:column; }
-  .viewer .bar { display:flex; align-items:center; gap:8px; padding:max(6px, env(safe-area-inset-top)) 8px 6px; border-bottom:1px solid var(--line); background:var(--panel); }
-  .viewer .bar span { flex:1; font-weight:600; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .viewer .bar button { width:auto; margin:0; padding:6px 12px; font-size:18px; line-height:1; }
-  .viewer iframe { flex:1; width:100%; border:0; background:var(--bg); }
-  .viewer .signin { position:absolute; inset:52px 0 0; background:var(--bg); padding:24px 20px; max-width:520px; margin:0 auto; }
+  .viewer iframe { flex:1; width:100%; border:0; background:var(--bg); padding-top:env(safe-area-inset-top); }
+  .viewer .signin { position:absolute; inset:0; background:var(--bg); padding:max(24px, env(safe-area-inset-top)) 20px 24px; max-width:520px; margin:0 auto; }
+  .viewer .signin button.link { background:none; border:0; color:var(--muted); text-decoration:underline; }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -71,13 +69,13 @@
   </section>
 
   <section class="viewer" id="viewer" hidden>
-    <div class="bar"><button id="v-back" aria-label="Back">‹</button><span id="v-title">hexad</span><button id="v-browser" title="Open in the browser">↗</button></div>
     <iframe id="v-frame" title="hexad" allow="clipboard-read; clipboard-write; camera; microphone"></iframe>
     <div class="signin" id="v-signin" hidden>
       <h2>Sign in to hexad's tunnel once</h2>
       <p>The tunnel asks for a GitHub sign-in, and GitHub does not allow signing in inside an app's frame. Sign in once in the browser, then come back here; after that hexad opens inside the app.</p>
       <button class="primary" id="v-signin-go">Sign in in the browser</button>
       <button id="v-signin-retry">I have signed in, try again</button>
+      <button class="link" id="v-signin-back">Back to the app</button>
     </div>
   </section>
 
@@ -269,7 +267,6 @@ function showHexad(url) {
   const p = store.current();
   viewer = { url, timer: null, ready: false };
   store.update(p.id, { lastUrl: url });
-  $('v-title').textContent = p ? p.h : 'hexad';
   $('v-signin').hidden = true;
   $('viewer').hidden = false;
   $('v-frame').src = url;
@@ -281,9 +278,9 @@ window.addEventListener('message', e => {
   if (!viewer.url || e.origin !== new URL(viewer.url).origin || !e.data || typeof e.data !== 'object') return;
   if (e.data.type === 'hexad-ready') { viewer.ready = true; clearTimeout(viewer.timer); $('v-signin').hidden = true; }
   if (e.data.type === 'hexad-reopen') { hideHexad(); send('open', { session: e.data.session || undefined }, 'Reopening hexad…'); }
+  if (e.data.type === 'hexad-home') hideHexad();
 });
-$('v-back').onclick = hideHexad;
-$('v-browser').onclick = () => window.open(viewer.url, '_blank');
+$('v-signin-back').onclick = hideHexad;
 $('v-signin-go').onclick = () => window.open(viewer.url, '_blank');
 $('v-signin-retry').onclick = () => showHexad(viewer.url);
 // Back from signing in in the browser: try the frame again.
