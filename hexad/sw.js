@@ -3,7 +3,33 @@
 // latest of each kind so a page opened later (from a notification, say) can show it.
 const LAST = 'hexad-last';
 
+const SHARES = 'hexad-share';
+const APP = new URL('./', self.location).href;
+
 self.addEventListener('install', () => self.skipWaiting());
+
+// The phone's share sheet posts what was shared to ./share (the manifest's share target). Only the app-wide worker
+// (scope ./) sees it: the per-pairing workers' scopes are narrower. It keeps the share and opens the page, which asks
+// where it goes.
+self.addEventListener('fetch', event => {
+  const req = event.request;
+  if (req.method !== 'POST' || new URL(req.url).href.split('?')[0] !== APP + 'share') return;
+  event.respondWith((async () => {
+    const form = await req.formData();
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const cache = await caches.open(SHARES);
+    const files = [];
+    for (const f of form.getAll('files')) {
+      if (!(f instanceof File) || !f.size) continue;
+      const n = files.length;
+      await cache.put(new Request(APP + 'share/' + id + '/' + n), new Response(f, { headers: { 'content-type': f.type || 'application/octet-stream' } }));
+      files.push({ n, name: f.name, type: f.type, size: f.size });
+    }
+    const meta = { title: String(form.get('title') || ''), text: String(form.get('text') || ''), url: String(form.get('url') || ''), files, at: Date.now() };
+    await cache.put(new Request(APP + 'share/' + id), new Response(JSON.stringify(meta), { headers: { 'content-type': 'application/json' } }));
+    return Response.redirect(APP + '?share=' + id, 303);
+  })());
+});
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 
 self.addEventListener('push', event => {

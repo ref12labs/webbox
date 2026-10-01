@@ -49,6 +49,13 @@
   .viewer iframe { flex:1; width:100%; border:0; background:var(--bg); padding-top:env(safe-area-inset-top); }
   .viewer .signin { position:absolute; inset:0; background:var(--bg); padding:max(24px, env(safe-area-inset-top)) 20px 24px; max-width:520px; margin:0 auto; }
   .viewer .signin button.link { background:none; border:0; color:var(--muted); text-decoration:underline; }
+  .share-preview { margin:4px 0 10px; font-size:14px; }
+  .share-preview .txt { white-space:pre-wrap; word-break:break-word; max-height:160px; overflow:auto; padding:8px 10px; border:1px solid var(--line); border-radius:10px; }
+  .share-preview .txt b { display:block; margin-bottom:2px; }
+  .share-preview .files { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+  .share-preview .files img { height:72px; max-width:120px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
+  .share-preview .files span { padding:6px 10px; border:1px solid var(--line); border-radius:8px; font-size:13px; }
+  button.link { background:none; border:0; color:var(--muted); text-decoration:underline; padding:6px; }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -91,6 +98,19 @@
     <p>Allow notifications so hexad can answer you: the link to open, sign-in codes, and sessions that are done or waiting on you.</p>
     <button class="primary" id="btn-enable">Enable</button>
     <p class="muted" id="enable-note"></p>
+  </section>
+
+  <section class="card" id="share-card" hidden>
+    <h2 id="share-title">Share to hexad</h2>
+    <div class="share-preview" id="share-preview"></div>
+    <div id="share-pick">
+      <button class="primary" data-to="hexad">Hexad's clipboard</button>
+      <button data-to="pc">The PC's clipboard</button>
+      <p class="muted">Hexad's clipboard shows in every session, ready to paste into any chat. The PC's clipboard pastes into any app on the PC.</p>
+    </div>
+    <div class="state" id="share-state" hidden></div>
+    <button id="share-done" hidden>Done</button>
+    <button class="link" id="share-discard">Discard</button>
   </section>
 
   <section class="card" id="code-card" hidden>
@@ -227,6 +247,8 @@ function show(msg) {
   else if (msg.t === 'closed') setState('', 'Tunnel closed');
   else if (msg.t === 'error') { setState('err', msg.body || 'Hexad could not do that'); waitingFor = null; }
   else if (msg.t === 'paired' || msg.t === 'pong' || msg.t === 'status') setState('ok', msg.body || 'Hexad is listening');
+  else if (msg.t === 'shared' && sharing && sharing.via === 'bell') shareDone(msg.title || 'Shared');
+  if (msg.t === 'error' && sharing) shareState('err', msg.body || 'Hexad could not take it');
 }
 new BroadcastChannel('hexad').onmessage = e => show(e.data);
 function setState(kind, text) { $('state').innerHTML = '<span class="dot ' + kind + '"></span><span></span>'; $('state').querySelector('span:last-child').textContent = text; }
@@ -276,7 +298,13 @@ function showHexad(url) {
 function hideHexad() { $('viewer').hidden = true; $('v-frame').src = 'about:blank'; clearTimeout(viewer.timer); }
 window.addEventListener('message', e => {
   if (!viewer.url || e.origin !== new URL(viewer.url).origin || !e.data || typeof e.data !== 'object') return;
-  if (e.data.type === 'hexad-ready') { viewer.ready = true; clearTimeout(viewer.timer); $('v-signin').hidden = true; }
+  if (e.data.type === 'hexad-ready') { viewer.ready = true; clearTimeout(viewer.timer); $('v-signin').hidden = true; handOver(); }
+  if (e.data.type === 'hexad-shared' && sharing && e.data.id === sharing.id) {
+    if (!e.data.ok) { hideHexad(); shareState('err', e.data.error || 'Hexad could not take it'); sharing.via = null; return; }
+    // On the PC's clipboard: back to this screen to say so. On hexad's: hexad stays in view, with the item in its composer.
+    if (sharing.to === 'pc') hideHexad();
+    shareDone(sharing.to === 'pc' ? "On the PC's clipboard" : "On hexad's clipboard");
+  }
   if (e.data.type === 'hexad-reopen') { hideHexad(); send('open', { session: e.data.session || undefined }, 'Reopening hexad…'); }
   if (e.data.type === 'hexad-home') hideHexad();
 });
@@ -285,6 +313,91 @@ $('v-signin-go').onclick = () => window.open(viewer.url, '_blank');
 $('v-signin-retry').onclick = () => showHexad(viewer.url);
 // Back from signing in in the browser: try the frame again.
 window.addEventListener('focus', () => { if (!$('viewer').hidden && !viewer.ready && !$('v-signin').hidden) showHexad(viewer.url); });
+
+// ---------- share to hexad: what the phone's share sheet sent ----------
+// The service worker kept it (text, a link, files) under hexad-share. The share screen asks where it goes. Text and links
+// small enough for one push message ring the doorbell, which works with the tunnel closed; files (and long text) go
+// through the tunnel: the page opens hexad in its frame and hands them to hexad there, which uploads them itself.
+const SHARES = 'hexad-share';
+let shareNow = null;   // the share on screen: { id, title, text, url, files: [File] }
+let sharing = null;    // the share on its way: { id, to, via: 'bell' | 'frame' | null }
+async function loadShare(id) {
+  const cache = await caches.open(SHARES);
+  const r = await cache.match('share/' + id); if (!r) return null;
+  const meta = await r.json(), files = [];
+  for (const f of meta.files || []) { const fr = await cache.match('share/' + id + '/' + f.n); if (fr) files.push(new File([await fr.blob()], f.name || 'shared', { type: f.type || '' })); }
+  return Object.assign(meta, { id, files });
+}
+async function pendingShares() {
+  try { const cache = await caches.open(SHARES); return (await cache.keys()).map(k => (new URL(k.url).pathname.match(/\/share\/([a-z0-9]+)$/) || [])[1]).filter(Boolean); }
+  catch { return []; }
+}
+async function dropShare(id) {
+  const cache = await caches.open(SHARES);
+  for (const k of await cache.keys()) { const path = new URL(k.url).pathname; if (path.endsWith('/share/' + id) || path.includes('/share/' + id + '/')) await cache.delete(k); }
+}
+function showShare(s) {
+  shareNow = s; sharing = null;
+  const pv = $('share-preview'); pv.innerHTML = '';
+  if (s.title || s.text || s.url) {
+    const t = document.createElement('div'); t.className = 'txt';
+    if (s.title) { const b = document.createElement('b'); b.textContent = s.title; t.append(b); }
+    t.append(document.createTextNode([s.text, s.url && !(s.text || '').includes(s.url) ? s.url : ''].filter(Boolean).join('\n')));
+    pv.append(t);
+  }
+  if (s.files.length) {
+    const fl = document.createElement('div'); fl.className = 'files';
+    for (const f of s.files) {
+      if (f.type.startsWith('image/')) { const img = document.createElement('img'); img.src = URL.createObjectURL(f); img.alt = f.name; fl.append(img); }
+      else { const sp = document.createElement('span'); sp.textContent = f.name + ' · ' + Math.max(1, Math.round(f.size / 1024)) + ' KB'; fl.append(sp); }
+    }
+    pv.append(fl);
+  }
+  $('share-title').textContent = 'Share to ' + (store.current() ? store.current().h : 'hexad');
+  $('share-pick').hidden = false; $('share-state').hidden = true; $('share-done').hidden = true; $('share-discard').hidden = false;
+  $('share-card').hidden = false;
+  window.scrollTo(0, 0);
+}
+function shareState(kind, text) {
+  $('share-state').hidden = false;
+  $('share-state').innerHTML = '<span class="dot ' + kind + '"></span><span></span>';
+  $('share-state').querySelector('span:last-child').textContent = text;
+  if (kind === 'err') $('share-pick').hidden = false;
+}
+async function shareDone(title) {
+  const id = sharing && sharing.id; sharing = null; shareNow = null;
+  if (id) await dropShare(id).catch(() => { });
+  $('share-pick').hidden = true; $('share-discard').hidden = true; $('share-done').hidden = false;
+  shareState('ok', title);
+}
+async function deliverShare(to) {
+  const s = shareNow, p = store.current();
+  if (!s) return;
+  if (!p || !p.enabled) return shareState('err', 'Pair with hexad and enable it first.');
+  $('share-pick').hidden = true;
+  const words = { title: s.title || undefined, text: s.text || undefined, url: s.url || undefined, to };
+  if (!s.files.length && enc.encode(JSON.stringify(words)).length <= 3000) {
+    sharing = { id: s.id, to, via: 'bell' };
+    shareState('warn', 'Sending to hexad…');
+    try { await ring(p, 'share', words); }
+    catch (err) { sharing = null; return shareState('err', err.message); }
+    setTimeout(() => { if (sharing && sharing.id === s.id && sharing.via === 'bell') shareState('warn', 'No answer yet: hexad may be off.'); }, 20000);
+    return;
+  }
+  sharing = { id: s.id, to, via: 'frame' };
+  if (viewer.ready && !$('viewer').hidden) return handOver();
+  shareState('warn', 'Opening hexad to hand ' + (s.files.length ? (s.files.length === 1 ? 'the file' : 'the files') : 'the text') + ' over…');
+  send('open', null, 'Opening hexad…');
+}
+// Hexad in the frame has reported in: give it the share (Files cross to its origin as they are).
+function handOver() {
+  if (!sharing || sharing.via !== 'frame' || !viewer.ready || !shareNow || shareNow.id !== sharing.id) return;
+  const s = shareNow;
+  $('v-frame').contentWindow.postMessage({ type: 'hexad-share', id: s.id, title: s.title, text: s.text, url: s.url, files: s.files, to: sharing.to, from: deviceName() }, new URL(viewer.url).origin);
+}
+for (const b of document.querySelectorAll('#share-pick button[data-to]')) b.onclick = () => deliverShare(b.dataset.to);
+$('share-done').onclick = () => { $('share-card').hidden = true; };
+$('share-discard').onclick = async () => { if (shareNow) await dropShare(shareNow.id).catch(() => { }); shareNow = null; sharing = null; $('share-card').hidden = true; };
 
 // ---------- pairing intake: from the address bar, the scanner or a pasted link ----------
 function acceptPairing(link) {
@@ -348,6 +461,14 @@ async function scan() {
   if (openSession || showCode || frameUrl) history.replaceState(null, '', location.pathname);
   if (frameUrl && /^https:\/\/[a-z0-9.-]+\.devtunnels\.ms\//.test(frameUrl) && store.current() && store.current().enabled) showHexad(frameUrl);
   render();
+  // The app-wide worker catches what the share sheet sends (the per-pairing workers cannot: their scopes are narrower).
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', { scope: './' }).catch(() => { });
+  const shareId = new URLSearchParams(location.search).get('share');
+  if (shareId) history.replaceState(null, '', location.pathname);
+  // A share just made, or an earlier one that never reached hexad.
+  const pending = await pendingShares();
+  const take = shareId && pending.includes(shareId) ? shareId : pending.sort().pop();
+  if (take) { const s = await loadShare(take).catch(() => null); if (s) showShare(s); }
   const p = store.current();
   if (p && p.enabled) {
     // Re-register quietly, so a page opened from a notification has its worker and the latest messages.
