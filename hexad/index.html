@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>hexad remote</title>
+<meta name="description" content="Ring your hexad, open it from anywhere, and hear when a session needs you.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#14161b">
+<style>
+  :root { --bg:#f6f7f9; --panel:#ffffff; --text:#1b1d22; --muted:#626a76; --line:#dde1e7; --accent:#2f5fd0; --accent-text:#ffffff; --ok:#1d8a4e; --warn:#a86b00; --err:#c0392b; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#14161b; --panel:#1d2027; --text:#e6e8ec; --muted:#9aa2ae; --line:#2e333d; --accent:#7aa2f7; --accent-text:#0f1115; --ok:#4cc38a; --warn:#e3b341; --err:#f47067; } }
+  :root[data-theme="dark"] { --bg:#14161b; --panel:#1d2027; --text:#e6e8ec; --muted:#9aa2ae; --line:#2e333d; --accent:#7aa2f7; --accent-text:#0f1115; --ok:#4cc38a; --warn:#e3b341; --err:#f47067; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; padding:max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); }
+  main { max-width:520px; margin:0 auto; }
+  header { display:flex; align-items:center; gap:12px; margin:8px 0 20px; }
+  header img { width:40px; height:40px; border-radius:10px; }
+  h1 { font-size:20px; margin:0; } header .sub { color:var(--muted); font-size:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; margin:14px 0; }
+  .card h2 { font-size:15px; margin:0 0 8px; }
+  p { margin:6px 0; } .muted { color:var(--muted); font-size:14px; }
+  button { font:inherit; border-radius:12px; border:1px solid var(--line); background:var(--panel); color:var(--text); padding:12px 14px; cursor:pointer; width:100%; margin:6px 0; }
+  button.primary { background:var(--accent); color:var(--accent-text); border-color:var(--accent); font-weight:600; font-size:17px; padding:15px; }
+  button:disabled { opacity:.55; cursor:default; }
+  .row { display:flex; gap:8px; } .row button { flex:1; }
+  .state { display:flex; align-items:center; gap:8px; font-size:14px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); flex:none; }
+  .dot.ok { background:var(--ok); } .dot.warn { background:var(--warn); } .dot.err { background:var(--err); }
+  .code { font:600 30px/1.2 ui-monospace, "Cascadia Mono", Menlo, monospace; letter-spacing:.1em; margin:8px 0; }
+  a { color:var(--accent); }
+  ol { padding-left:20px; margin:6px 0; } li { margin:4px 0; }
+  .log { font-size:13px; color:var(--muted); max-height:220px; overflow:auto; }
+  .log div { padding:5px 0; border-top:1px solid var(--line); }
+  .log b { color:var(--text); font-weight:600; }
+  select { font:inherit; width:100%; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel); color:var(--text); }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header><img src="icon.svg" alt=""><div><h1>hexad remote</h1><div class="sub" id="who">not paired</div></div></header>
+
+  <section class="card" id="unpaired">
+    <h2>Pair this device</h2>
+    <ol>
+      <li>On the computer running hexad, open <b>Settings, Remote</b> and choose <b>Pair a device</b>.</li>
+      <li>Scan the code with this device's camera and open the link.</li>
+      <li id="ios-hint" hidden>On an iPhone or iPad: tap Share, then <b>Add to Home Screen</b>, and open hexad from the home screen. iOS only delivers notifications to installed web apps.</li>
+    </ol>
+  </section>
+
+  <section class="card" id="enable" hidden>
+    <h2>Finish pairing</h2>
+    <p>Allow notifications so hexad can answer you: the link to open, sign-in codes, and sessions that are done or waiting on you.</p>
+    <button class="primary" id="btn-enable">Enable</button>
+    <p class="muted" id="enable-note"></p>
+  </section>
+
+  <section class="card" id="code-card" hidden>
+    <h2>Sign hexad's tunnel in</h2>
+    <p>Hexad's tunnel needs a fresh GitHub sign-in. Enter this code with the GitHub account that owns the tunnel:</p>
+    <div class="code" id="code"></div>
+    <button class="primary" id="btn-code">Open GitHub</button>
+    <p class="muted">Hexad opens the tunnel as soon as the sign-in is approved, and sends the link here.</p>
+  </section>
+
+  <section class="card" id="paired" hidden>
+    <select id="pick" hidden></select>
+    <div class="state" id="state"><span class="dot"></span><span>Ready</span></div>
+    <button class="primary" id="btn-open">Open hexad</button>
+    <div class="row"><button id="btn-status">Status</button><button id="btn-close">Close tunnel</button><button id="btn-ping">Test</button></div>
+    <p class="muted" id="open-note"></p>
+  </section>
+
+  <section class="card" id="log-card" hidden>
+    <h2>From hexad</h2>
+    <div class="log" id="log"></div>
+  </section>
+
+  <section class="card" id="manage" hidden>
+    <button id="btn-forget">Forget this pairing</button>
+    <p class="muted">Forgetting stops this device ringing hexad. Remove it from hexad's Settings too.</p>
+  </section>
+</main>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const enc = new TextEncoder();
+const b64u = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = s => { s = s.replace(/-/g, '+').replace(/_/g, '/'); s += '='.repeat((4 - s.length % 4) % 4); return Uint8Array.from(atob(s), c => c.charCodeAt(0)); };
+const concat = (...p) => { const o = new Uint8Array(p.reduce((a, x) => a + x.length, 0)); let i = 0; for (const x of p) { o.set(x, i); i += x.length; } return o; };
+
+// ---------- pairings, kept on this device only ----------
+const store = {
+  all() { try { return JSON.parse(localStorage.getItem('hexad.pairings') || '[]'); } catch { return []; } },
+  save(list) { localStorage.setItem('hexad.pairings', JSON.stringify(list)); },
+  current() { const all = this.all(); const id = localStorage.getItem('hexad.current'); return all.find(p => p.id === id) || all[0] || null; },
+  select(id) { localStorage.setItem('hexad.current', id); },
+  put(p) { const list = this.all().filter(x => x.id !== p.id); list.push(p); this.save(list); this.select(p.id); },
+  update(id, patch) { const list = this.all().map(x => x.id === id ? Object.assign(x, patch) : x); this.save(list); },
+  remove(id) { this.save(this.all().filter(x => x.id !== id)); localStorage.removeItem('hexad.current'); },
+};
+
+// ---------- Web Push to hexad: RFC 8291 encryption, signed with this pairing's key (RFC 8292) ----------
+async function hmac(key, data) { const k = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']); return new Uint8Array(await crypto.subtle.sign('HMAC', k, data)); }
+async function hkdf(salt, ikm, info, len) { return (await hmac(await hmac(salt, ikm), concat(info, new Uint8Array([1])))).slice(0, len); }
+async function encrypt(receiverPublic, auth, plaintext) {
+  const eph = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const senderPublic = new Uint8Array(await crypto.subtle.exportKey('raw', eph.publicKey));
+  const rk = await crypto.subtle.importKey('raw', receiverPublic, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const secret = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: rk }, eph.privateKey, 256));
+  const ikm = await hkdf(auth, secret, concat(enc.encode('WebPush: info\0'), receiverPublic, senderPublic), 32);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey('raw', await hkdf(salt, ikm, enc.encode('Content-Encoding: aes128gcm\0'), 16), 'AES-GCM', false, ['encrypt']);
+  const nonce = await hkdf(salt, ikm, enc.encode('Content-Encoding: nonce\0'), 12);
+  const record = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, key, concat(enc.encode(plaintext), new Uint8Array([2]))));
+  return concat(salt, new Uint8Array([0, 0, 16, 0, senderPublic.length]), senderPublic, record);
+}
+async function vapid(endpoint, pkcs8) {
+  const key = await crypto.subtle.importKey('pkcs8', unb64u(pkcs8), { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign']);
+  const jwk = await crypto.subtle.exportKey('jwk', key);
+  const pub = concat(new Uint8Array([4]), unb64u(jwk.x), unb64u(jwk.y));
+  const head = b64u(enc.encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
+  const claims = b64u(enc.encode(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(Date.now() / 1000) + 3600, sub: location.origin + '/' })));
+  const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, enc.encode(head + '.' + claims));
+  return 'vapid t=' + head + '.' + claims + '.' + b64u(sig) + ', k=' + b64u(pub);
+}
+async function ring(p, command, extra) {
+  const msg = Object.assign({ t: command, ts: Date.now(), n: b64u(crypto.getRandomValues(new Uint8Array(12))) }, extra || {});
+  const body = await encrypt(unb64u(p.k), unb64u(p.a), JSON.stringify(msg));
+  const r = await fetch(p.e, { method: 'POST', body, headers: { 'Content-Encoding': 'aes128gcm', 'TTL': '300', 'Urgency': 'high', 'Content-Type': 'application/octet-stream', 'Authorization': await vapid(p.e, p.d) } });
+  if (!r.ok) throw new Error('The push service refused the message (' + r.status + '): ' + (await r.text()).slice(0, 160));
+}
+
+// ---------- this device's own subscription, one service worker registration per pairing ----------
+const scopeOf = p => new URL('p/' + p.id + '/', location.href).href;
+async function registration(p) { return navigator.serviceWorker.register('sw.js', { scope: scopeOf(p) }); }
+async function enable(p) {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error(isIos() && !standalone() ? 'Add this page to the home screen and open it from there: iOS only allows notifications for installed web apps.' : 'This browser does not support push notifications.');
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') throw new Error('Notifications are blocked for this page; allow them in the browser settings and try again.');
+  const reg = await registration(p);
+  await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  const want = b64u(unb64u(p.s));
+  if (sub && sub.options && sub.options.applicationServerKey && b64u(sub.options.applicationServerKey) !== want) { await sub.unsubscribe(); sub = null; }
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64u(p.s) });
+  await ring(p, 'hello', { sub: sub.toJSON(), name: deviceName() });
+  store.update(p.id, { enabled: true });
+}
+const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const deviceName = () => (navigator.userAgentData && navigator.userAgentData.platform) || (isIos() ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Android' : 'browser');
+
+// ---------- replies from hexad ----------
+let waitingFor = null;   // 'open' while a link is expected; the page goes there when it arrives
+function show(msg) {
+  const p = store.current();
+  if (!p || (msg.device && msg.device !== p.id)) return;
+  $('log-card').hidden = false;
+  const line = document.createElement('div');
+  line.innerHTML = '<b></b> <span></span>';
+  line.querySelector('b').textContent = msg.title || msg.t;
+  line.querySelector('span').textContent = (msg.body || '') + ' · ' + new Date(msg.ts || Date.now()).toLocaleTimeString();
+  $('log').prepend(line);
+  if (msg.t === 'code') { $('code').textContent = msg.code; $('code-card').hidden = false; $('btn-code').onclick = () => window.open(msg.verify, '_blank'); setState('warn', 'Waiting for the tunnel sign-in'); }
+  else if (msg.t === 'url') {
+    $('code-card').hidden = true; setState('ok', 'Open');
+    if (waitingFor === 'open' && document.visibilityState === 'visible') { waitingFor = null; location.href = msg.url; }
+    else $('open-note').innerHTML = '<a href="' + msg.url + '">Go to hexad</a>';
+  }
+  else if (msg.t === 'closed') setState('', 'Tunnel closed');
+  else if (msg.t === 'error') { setState('err', msg.body || 'Hexad could not do that'); waitingFor = null; }
+  else if (msg.t === 'paired' || msg.t === 'pong' || msg.t === 'status') setState('ok', msg.body || 'Hexad is listening');
+}
+new BroadcastChannel('hexad').onmessage = e => show(e.data);
+function setState(kind, text) { $('state').innerHTML = '<span class="dot ' + kind + '"></span><span></span>'; $('state').querySelector('span:last-child').textContent = text; }
+
+async function send(command, extra, note) {
+  const p = store.current(); if (!p) return;
+  for (const b of document.querySelectorAll('#paired button')) b.disabled = true;
+  try {
+    await ring(p, command, extra);
+    setState('warn', note);
+    if (command === 'open') waitingFor = 'open';
+    // A reply normally comes within seconds; say so if it does not.
+    setTimeout(() => { if (waitingFor === 'open') setState('warn', 'No answer yet: hexad may be off, or still waiting on the tunnel sign-in.'); }, 25000);
+  } catch (err) { setState('err', err.message); }
+  finally { setTimeout(() => { for (const b of document.querySelectorAll('#paired button')) b.disabled = false; }, 1500); }
+}
+
+function render() {
+  const all = store.all(), p = store.current();
+  $('ios-hint').hidden = !(isIos() && !standalone());
+  $('unpaired').hidden = !!p;
+  $('enable').hidden = !p || !!p.enabled;
+  $('paired').hidden = $('manage').hidden = !p || !p.enabled;
+  $('who').textContent = p ? p.h : 'not paired';
+  $('pick').hidden = all.length < 2;
+  $('pick').innerHTML = all.map(x => '<option value="' + x.id + '"' + (p && x.id === p.id ? ' selected' : '') + '></option>').join('');
+  [...$('pick').options].forEach((o, i) => o.textContent = all[i].h);
+}
+
+// ---------- start ----------
+(async () => {
+  // A pairing link: keep its keys on this device and take them out of the address bar and history.
+  if (location.hash.startsWith('#pair=')) {
+    try {
+      const d = JSON.parse(new TextDecoder().decode(unb64u(location.hash.slice(6))));
+      store.put({ id: d.id, h: d.h, e: d.e, k: d.k, a: d.a, d: d.d, s: d.s, pairedAt: Date.now(), enabled: false });
+    } catch { alert('This pairing link is damaged; pair again from hexad.'); }
+    history.replaceState(null, '', location.pathname);
+  }
+  const openSession = location.hash.startsWith('#open=') ? decodeURIComponent(location.hash.slice(6)) : null;
+  const showCode = location.hash === '#code';
+  if (openSession || showCode) history.replaceState(null, '', location.pathname);
+  render();
+  const p = store.current();
+  if (p && p.enabled) {
+    // Re-register quietly, so a page opened from a notification has its worker and the latest messages.
+    try { await registration(p); } catch { }
+    try {
+      const cache = await caches.open('hexad-last');
+      for (const t of ['code', 'url', 'status', 'closed', 'error']) { const r = await cache.match('last/' + p.id + '/' + t); if (r && t === 'code' && showCode) show(await r.json()); }
+    } catch { }
+    if (openSession) send('open', { session: openSession }, 'Opening hexad…');
+  }
+})();
+
+$('btn-enable').onclick = async () => {
+  const p = store.current(); $('btn-enable').disabled = true; $('enable-note').textContent = 'Asking hexad…';
+  try { await enable(p); $('enable-note').textContent = ''; render(); setState('warn', 'Waiting for hexad to confirm…'); }
+  catch (err) { $('enable-note').textContent = err.message; }
+  finally { $('btn-enable').disabled = false; }
+};
+$('btn-open').onclick = () => send('open', null, 'Opening hexad…');
+$('btn-status').onclick = () => send('status', null, 'Asking hexad…');
+$('btn-close').onclick = () => send('close', null, 'Closing the tunnel…');
+$('btn-ping').onclick = () => send('ping', null, 'Ringing…');
+$('pick').onchange = e => { store.select(e.target.value); render(); };
+$('btn-forget').onclick = async () => {
+  const p = store.current(); if (!p || !confirm('Forget the pairing with ' + p.h + '?')) return;
+  try { const reg = await navigator.serviceWorker.getRegistration(scopeOf(p)); if (reg) { const s = await reg.pushManager.getSubscription(); if (s) await s.unsubscribe(); await reg.unregister(); } } catch { }
+  store.remove(p.id); render();
+};
+</script>
+</body>
+</html>

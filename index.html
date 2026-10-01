@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webbox</title>
+<meta name="description" content="A playground of small web apps.">
+<style>
+  :root { --bg:#f6f7f9; --panel:#ffffff; --text:#1b1d22; --muted:#626a76; --line:#dde1e7; --accent:#2f5fd0; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#14161b; --panel:#1d2027; --text:#e6e8ec; --muted:#9aa2ae; --line:#2e333d; --accent:#7aa2f7; } }
+  :root[data-theme="dark"] { --bg:#14161b; --panel:#1d2027; --text:#e6e8ec; --muted:#9aa2ae; --line:#2e333d; --accent:#7aa2f7; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; padding:24px 16px; }
+  main { max-width:640px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; } p { color:var(--muted); margin:0 0 20px; }
+  a.app { display:block; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin:10px 0; color:var(--text); text-decoration:none; }
+  a.app:hover { border-color:var(--accent); }
+  a.app b { color:var(--accent); } a.app span { display:block; color:var(--muted); font-size:14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>webbox</h1>
+  <p>A playground of small web apps, each in its own folder.</p>
+  <a class="app" href="hexad/"><b>hexad remote</b><span>Ring a hexad agent harness, open it from anywhere, and hear when a session needs you.</span></a>
+</main>
+</body>
+</html>

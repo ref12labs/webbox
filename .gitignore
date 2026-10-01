@@ -1,0 +1,36 @@
+# Dependencies and build output
+node_modules/
+.npm/
+.pnpm-store/
+dist/
+build/
+out/
+.cache/
+.parcel-cache/
+.vite/
+.next/
+coverage/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*~
+
+# Local configuration and secrets: never published
+.env
+.env.*
+*.local
+*.local.json
+*.key
+*.pem
+secrets.*
+
+# Editors and operating systems
+.vscode/
+.idea/
+.vs/
+*.code-workspace
+.DS_Store
+Thumbs.db
+desktop.ini
