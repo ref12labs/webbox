@@ -24,11 +24,11 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      # Read-only deploy key on Ref12/hexad; the branch is the repository variable HEXAD_REF (default fable).
+      # Read-only deploy key on Ref12/hexad; the branch is the repository variable HEXAD_REF (default main).
       - uses: actions/checkout@v4
         with:
           repository: Ref12/hexad
-          ref: ${{ vars.HEXAD_REF || 'fable' }}
+          ref: ${{ vars.HEXAD_REF || 'main' }}
           ssh-key: ${{ secrets.HEXAD_DEPLOY_KEY }}
           path: _hexad
           sparse-checkout: web/remote
