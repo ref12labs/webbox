@@ -18,8 +18,13 @@
     <button id="load" class="primary">Load model</button>
   </div>
   <details id="settings">
-    <summary>System prompt</summary>
-    <textarea id="system" rows="3">You are a helpful assistant.</textarea>
+    <summary>Settings: system prompt, context, reply length</summary>
+    <textarea id="system" rows="3" aria-label="System prompt">You are a helpful assistant.</textarea>
+    <div class="row set">
+      <label>Context size <select id="ctx"></select></label>
+      <label>Reply length (tokens) <input id="reply" type="number" min="16" max="8192" step="16" value="512"></label>
+    </div>
+    <p class="note" id="ctxnote"></p>
   </details>
   <p class="note" id="cpunote" hidden>CPU mode (WebAssembly) is much slower than the GPU: expect a few tokens per second, and a first load of 500 MB+. <span id="threads"></span></p>
   <p class="note">Runs entirely in your browser (WebGPU or WebAssembly); nothing is sent to a server. Weights download once and are cached by the browser, so later visits load much faster.</p>
@@ -34,6 +39,7 @@
   <button id="stop" type="button" hidden>Stop</button>
   <button id="clear" type="button" title="Clear chat">Clear</button>
 </form>
+<div id="meterbox"><progress id="meterbar" max="1" value="0"></progress><div id="meter"></div></div>
 <div id="stats"></div>
 <script type="module" src="app.js"></script>
 </body>

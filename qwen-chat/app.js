@@ -5,7 +5,7 @@ const TRANSFORMERS = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3
 const $ = (id) => document.getElementById(id);
 const el = { engine: $("engine"), model: $("model"), load: $("load"), system: $("system"), nogpu: $("nogpu"), progress: $("progress"),
   bar: $("bar").firstElementChild, ptext: $("ptext"), error: $("error"), log: $("log"), form: $("form"),
-  input: $("input"), send: $("send"), stop: $("stop"), clear: $("clear"), stats: $("stats"), cpunote: $("cpunote"), threads: $("threads") };
+  input: $("input"), send: $("send"), stop: $("stop"), clear: $("clear"), stats: $("stats"), ctx: $("ctx"), reply: $("reply"), ctxnote: $("ctxnote"), meter: $("meter"), meterbar: $("meterbar"), cpunote: $("cpunote"), threads: $("threads") };
 
 const store = {
   get(k) { try { return localStorage.getItem("qwenchat." + k); } catch { return null; } },
@@ -15,6 +15,7 @@ const mb = (n) => n >= 1024 ? (n / 1024).toFixed(1) + " GB" : Math.round(n) + " 
 const errText = (e) => String((e && e.message) || e);
 const looksOOM = (m) => /memory|alloc|OOM|device lost|too large|limit|abort|RangeError/i.test(m);
 
+let loadedCtx = 0;
 let active = null;       // loaded engine object
 let history = [], busy = false, loadedId = null, hasF16 = false, gpuReason = "";
 const dlSizes = {};
@@ -39,18 +40,29 @@ const gpu = {
       .map((m) => ({ id: m.model_id, label: m.model_id.replace("-MLC", ""), dl: dlSizes[m.model_id], need: "needs ~" + mb(m.vram_required_MB || 0) + " GPU memory" }));
   },
   defaultModel() { return hasF16 ? "Qwen3-0.6B-q4f16_1-MLC" : "Qwen3-0.6B-q4f32_1-MLC"; },
-  async load(id, onProgress) {
+  async load(id, onProgress, ctx) {
     await this.unload();
-    this.engine = await this.mod.CreateMLCEngine(id, { initProgressCallback: (p) => onProgress(p.progress || 0, p.text) });
+    this.engine = await this.mod.CreateMLCEngine(id, { initProgressCallback: (p) => onProgress(p.progress || 0, p.text) },
+      { context_window_size: ctx });
   },
-  async generate(messages, id, onText, tick) {
-    const req = { messages, stream: true, stream_options: { include_usage: true } };
+  // WebLLM exposes no tokenizer: estimate from characters, calibrated by the prompt_tokens it reports after each reply.
+  cpt: 3.3, exact: false, how: "estimated (WebLLM has no tokenizer API; calibrated from its own prompt token counts)",
+  count(messages) {
+    const chars = messages.reduce((s, m) => s + m.content.length, 0);
+    return Math.ceil(chars / this.cpt) + 5 * messages.length + 3;
+  },
+  async generate(messages, id, onText, o) {
+    const req = { messages, stream: true, stream_options: { include_usage: true }, max_tokens: o.maxTokens };
     if (/^Qwen3/.test(id)) req.extra_body = { enable_thinking: false };
     let acc = "", usage = null;
     for await (const c of await this.engine.chat.completions.create(req)) {
       const d = c.choices[0]?.delta?.content;
       if (d) { acc += d; onText(acc); }
       if (c.usage) usage = c.usage;
+    }
+    if (usage?.prompt_tokens) {
+      const chars = messages.reduce((s, m) => s + m.content.length, 0), t = usage.prompt_tokens - 5 * messages.length - 3;
+      if (t > 20) this.cpt = Math.min(6, Math.max(1.5, 0.5 * this.cpt + 0.5 * (chars / t)));
     }
     return { text: acc, tokens: usage?.completion_tokens, tps: usage?.extra?.decode_tokens_per_s };
   },
@@ -82,6 +94,12 @@ const cpu = {
     wasm.numThreads = self.crossOriginIsolated ? Math.min(navigator.hardwareConcurrency || 2, 4) : 1;
     wasm.proxy = true; // run inference in a worker so the page stays responsive and Stop works
   },
+  exact: true, how: "counted with the model's own tokenizer",
+  count(messages, id) {
+    const tok = this.gen.tokenizer, kw = { tokenize: false, add_generation_prompt: true };
+    if (/Qwen3/.test(id)) kw.enable_thinking = false;
+    return tok.encode(tok.apply_chat_template(messages, kw)).length;
+  },
   async load(id, onProgress) {
     await this.unload();
     onProgress(0, "Loading transformers.js…");
@@ -100,7 +118,7 @@ const cpu = {
     onProgress(1, "Compiling / warming up…");
     await this.gen("hi", { max_new_tokens: 1 }); // first run compiles the wasm session; do it now
   },
-  async generate(messages, id, onText, tick) {
+  async generate(messages, id, onText, o) {
     const { TextStreamer, InterruptableStoppingCriteria } = this.mod;
     this.stopper = new InterruptableStoppingCriteria();
     let acc = "", n = 0, first = 0;
@@ -109,7 +127,7 @@ const cpu = {
       callback_function: (t) => { acc += t; onText(acc); },
       token_callback_function: () => { if (!n) first = performance.now(); n++; },
     });
-    const opts = { max_new_tokens: 512, do_sample: false, streamer, stopping_criteria: this.stopper };
+    const opts = { max_new_tokens: o.maxTokens, do_sample: false, streamer, stopping_criteria: this.stopper };
     if (/Qwen3/.test(id)) opts.chat_template_kwargs = { enable_thinking: false };
     await this.gen(messages, opts);
     const dt = (performance.now() - first) / 1000;
@@ -121,6 +139,53 @@ const cpu = {
 const engines = { gpu, cpu };
 
 // ---------------------------------------------------------------- UI
+const KV = [ // [layers, kv heads, head dim] per Qwen family, for the KV-cache cost of a longer context (fp16 K and V)
+  [/Qwen3\.5/, null], [/Qwen3-(0\.6|1\.7)B/, [28, 8, 128]], [/Qwen3-(4|8)B/, [36, 8, 128]],
+  [/Qwen2(\.5)?(-Coder|-Math)?-0\.5B/, [24, 2, 64]], [/Qwen2(\.5)?(-Coder|-Math)?-1\.5B/, [28, 2, 128]],
+  [/Qwen2\.5(-Coder)?-3B/, [36, 2, 128]], [/Qwen2(\.5)?(-Coder|-Math)?-7B/, [28, 4, 128]],
+];
+function kvMB(id, tokens) {
+  const f = KV.find(([r]) => r.test(id));
+  return f && f[1] ? tokens * 2 * f[1][0] * f[1][1] * f[1][2] * 2 / 1048576 : null;
+}
+const isPhone = () => (matchMedia("(pointer: coarse)").matches && innerWidth < 900) || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+const CTX_OPTS = { gpu: [4096, 8192, 16384, 32768], cpu: [1024, 2048, 4096, 8192, 16384, 32768] };
+const ctxSize = () => +el.ctx.value || 4096;
+const replyLen = () => Math.max(16, Math.min(8192, +el.reply.value || 512));
+const replyEff = () => Math.min(replyLen(), ctxSize() >> 1); // a reply may use at most half the context
+
+function fillCtx() {
+  const e = cur(), saved = +store.get("ctx." + e.id);
+  const def = e.id === "cpu" ? 4096 : isPhone() ? 4096 : 8192;
+  el.ctx.innerHTML = "";
+  for (const n of CTX_OPTS[e.id]) { const o = document.createElement("option"); o.value = n; el.ctx.append(o); }
+  el.ctx.value = CTX_OPTS[e.id].includes(saved) ? saved : def;
+  updateCtxLabels();
+}
+function updateCtxLabels() {
+  const e = cur(), id = el.model.value;
+  for (const o of el.ctx.options) {
+    const n = +o.value, extra = e.id === "gpu" ? kvMB(id, n - 4096) : null;
+    o.textContent = n / 1024 + "K tokens" + (e.id === "gpu" && n > 4096 ? (extra != null ? " (+~" + mb(extra) + " GPU memory)" : " (extra GPU memory unknown)") : "");
+  }
+  el.ctxnote.textContent = e.id === "gpu"
+    ? "GPU: WebLLM's built-in Qwen configs use 4K; the model supports ~32K. Larger sizes cost extra GPU memory (KV cache estimate for the selected model, relative to 4K) and changing the size reloads the model."
+    : "CPU: the max context is used for trimming only; long histories are slow in single-threaded WebAssembly, so 4K is the default.";
+}
+
+function updateMeter() {
+  const ctx = ctxSize();
+  if (!active) { el.meter.textContent = "Context: load a model to count tokens (limit " + ctx + ")"; el.meterbar.value = 0; return; }
+  const n = active.count(buildMessages(history), loadedId);
+  el.meterbar.max = ctx; el.meterbar.value = Math.min(n, ctx);
+  el.meter.textContent = "Context: " + (active.exact ? "" : "~") + n + " / " + ctx + " tokens (" + Math.round(100 * n / ctx) + "%), reply budget " + replyEff() + " · " + active.how;
+}
+function buildMessages(h) {
+  const m = [];
+  if (el.system.value.trim()) m.push({ role: "system", content: el.system.value.trim() });
+  for (const x of h) m.push({ role: x.role, content: x.content });
+  return m;
+}
 function showError(msg) { el.error.textContent = msg; el.error.hidden = !msg; }
 const cur = () => engines[el.engine.value];
 
@@ -138,7 +203,9 @@ function fillModels() {
   el.threads.textContent = e.id === "cpu" ? (self.crossOriginIsolated
     ? "Multi-threaded (page is cross-origin isolated)."
     : "Single-threaded: threads need SharedArrayBuffer, which needs cross-origin isolation headers that this host cannot set.") : "";
+  fillCtx();
   if (e.id === "gpu") fetchSizes();
+  updateMeter();
 }
 const modelText = (m) => m.label + " — " + (m.dl ? "download ~" + mb(m.dl / 1048576) + ", " : "") + m.need;
 
@@ -164,7 +231,7 @@ function setBusy(b) {
   busy = b;
   el.send.hidden = b; el.stop.hidden = !b;
   el.send.disabled = b || !active; el.input.disabled = !active;
-  el.model.disabled = el.load.disabled = el.engine.disabled = b;
+  el.model.disabled = el.load.disabled = el.engine.disabled = el.ctx.disabled = b;
 }
 
 async function loadModel() {
@@ -177,7 +244,8 @@ async function loadModel() {
   active = null; el.input.disabled = el.send.disabled = true;
   try {
     const t0 = performance.now();
-    await e.load(id, (p, text) => { el.bar.style.width = Math.round(p * 100) + "%"; el.ptext.textContent = text; });
+    await e.load(id, (p, text) => { el.bar.style.width = Math.round(p * 100) + "%"; el.ptext.textContent = text; }, ctxSize());
+    loadedCtx = ctxSize();
     active = e; loadedId = id; history = []; el.log.textContent = ""; el.stats.textContent = "";
     store.set("model." + e.id, id);
     el.bar.style.width = "100%";
@@ -185,35 +253,48 @@ async function loadModel() {
     el.input.placeholder = "Message (Enter to send, Shift+Enter for newline)";
   } catch (err) {
     const m = errText(err);
-    showError((looksOOM(m) ? "Not enough memory for this model. Pick a smaller model from the list and press Load model again. " : "Could not load the model. Check your connection or pick another model or engine. ") + "Details: " + m);
+    showError((looksOOM(m) ? "Not enough memory for this model" + (e === gpu ? " at this context size" : "") + ". Pick a smaller model" + (e === gpu ? " or context size" : "") + " from the list and press Load model again. " : "Could not load the model. Check your connection or pick another model or engine. ") + "Details: " + m);
     el.progress.hidden = true;
   }
   setBusy(false);
+  updateMeter();
   if (active) el.input.focus();
 }
 
 async function send() {
   const text = el.input.value.trim();
   if (!text || !active || busy) return;
+  const ctx = ctxSize(), reply = replyEff(), e = active;
+  const fits = (h) => e.count(buildMessages(h), loadedId) + reply <= ctx;
+  const user = { role: "user", content: text };
+  if (!fits([user])) {
+    showError("This message plus the system prompt and the reply budget (" + reply + " tokens) do not fit in the " + ctx + "-token context. Shorten it, lower the reply length, or raise the context size.");
+    return;
+  }
   el.input.value = ""; autosize(); showError("");
-  history.push({ role: "user", content: text });
-  addMsg("user", text);
+  // Trim: drop the oldest turns (never the system prompt) until the new turn and the reply fit.
+  const pending = [...history, user];
+  let dropped = 0;
+  while (!fits(pending)) {
+    const x = pending.shift(); dropped++; x.node && x.node.classList.add("dropped");
+    while (pending.length > 1 && pending[0].role !== "user") { const y = pending.shift(); dropped++; y.node && y.node.classList.add("dropped"); }
+  }
+  history = pending;
+  if (dropped) addMsg("note", "Earlier messages were dropped to fit the context (" + dropped + " message" + (dropped > 1 ? "s" : "") + ", shown dimmed above).");
+  user.node = addMsg("user", text);
   const out = addMsg("assistant", "…");
   setBusy(true);
   let res = { text: "" }; const t0 = performance.now();
   try {
-    const messages = [];
-    if (el.system.value.trim()) messages.push({ role: "system", content: el.system.value.trim() });
-    messages.push(...history);
-    res = await active.generate(messages, loadedId, (t) => { out.textContent = t; el.log.scrollTop = el.log.scrollHeight; });
+    res = await e.generate(buildMessages(history), loadedId, (t) => { out.textContent = t; el.log.scrollTop = el.log.scrollHeight; }, { maxTokens: reply });
     const secs = (performance.now() - t0) / 1000;
     el.stats.textContent = (res.tokens ? res.tokens + " tokens, " : "") + (res.tps ? res.tps.toFixed(1) + " tok/s decode, " : "") + secs.toFixed(1) + " s total";
   } catch (err) {
-    showError("Generation failed: " + errText(err) + (looksOOM(errText(err)) ? " — try a smaller model." : ""));
+    showError("Generation failed: " + errText(err) + (looksOOM(errText(err)) ? " — try a smaller model or context size." : ""));
   }
   if (!res.text) out.textContent = "(no output)";
-  history.push({ role: "assistant", content: res.text });
-  setBusy(false); el.input.focus();
+  history.push({ role: "assistant", content: res.text, node: out });
+  setBusy(false); updateMeter(); el.input.focus();
 }
 
 function autosize() { el.input.style.height = "auto"; el.input.style.height = Math.min(el.input.scrollHeight, 144) + "px"; }
@@ -224,8 +305,16 @@ el.input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });
 el.stop.addEventListener("click", () => active && active.stop());
-el.clear.addEventListener("click", () => { if (busy && active) active.stop(); history = []; el.log.textContent = ""; el.stats.textContent = ""; });
+el.clear.addEventListener("click", () => { if (busy && active) active.stop(); history = []; el.log.textContent = ""; el.stats.textContent = ""; updateMeter(); });
 el.load.addEventListener("click", loadModel);
+el.ctx.addEventListener("change", () => {
+  store.set("ctx." + el.engine.value, el.ctx.value); updateMeter();
+  if (active === gpu && el.engine.value === "gpu" && loadedCtx !== ctxSize()) loadModel(); // WebLLM needs a reload for a new window size
+});
+el.reply.value = store.get("reply") || 512;
+el.reply.addEventListener("change", () => { el.reply.value = replyLen(); store.set("reply", el.reply.value); updateMeter(); });
+el.system.addEventListener("input", updateMeter);
+el.model.addEventListener("change", updateCtxLabels);
 el.engine.addEventListener("change", () => { store.set("engine", el.engine.value); fillModels(); });
 
 (async () => {

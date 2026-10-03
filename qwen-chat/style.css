@@ -26,3 +26,11 @@ main{flex:1;overflow-y:auto;padding:.6rem .8rem;display:flex;flex-direction:colu
 #form textarea{resize:none;max-height:9rem}
 #stats{font-size:.75rem;color:var(--mut);padding:0 .8rem .5rem;min-height:1.2rem}
 [hidden]{display:none!important}
+.set{flex-wrap:wrap;margin-top:.4rem}
+.set label{display:flex;flex-direction:column;font-size:.8rem;color:var(--mut);gap:.2rem;flex:1;min-width:9rem}
+.set input{width:100%;font:inherit;color:inherit;background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:.45rem .6rem}
+#meterbox{padding:0 .8rem}
+#meterbar{width:100%;height:6px;accent-color:var(--acc)}
+#meter{font-size:.75rem;color:var(--mut)}
+.msg.note{align-self:center;background:none;color:var(--mut);font-size:.8rem;font-style:italic;text-align:center}
+.msg.dropped{opacity:.45}
