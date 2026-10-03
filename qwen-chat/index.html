@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Qwen chat (in-browser, WebGPU)</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Qwen chat</h1>
+  <div class="row">
+    <select id="model" aria-label="Model"></select>
+    <button id="load" class="primary">Load model</button>
+  </div>
+  <details id="settings">
+    <summary>System prompt</summary>
+    <textarea id="system" rows="3">You are a helpful assistant.</textarea>
+  </details>
+  <p class="note">Runs entirely in your browser on WebGPU; nothing is sent to a server. Weights download once and are cached by the browser, so later visits load much faster.</p>
+</header>
+<div id="nogpu" class="banner err" hidden></div>
+<div id="progress" hidden><div id="bar"><i></i></div><div id="ptext"></div></div>
+<div id="error" class="banner err" hidden></div>
+<main id="log" aria-live="polite"></main>
+<form id="form">
+  <textarea id="input" rows="1" placeholder="Load a model first…" disabled></textarea>
+  <button id="send" class="primary" disabled>Send</button>
+  <button id="stop" type="button" hidden>Stop</button>
+  <button id="clear" type="button" title="Clear chat">Clear</button>
+</form>
+<div id="stats"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
