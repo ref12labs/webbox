@@ -11,6 +11,9 @@
 <header>
   <h1>Qwen chat</h1>
   <div class="row">
+    <select id="engine" aria-label="Engine"></select>
+  </div>
+  <div class="row">
     <select id="model" aria-label="Model"></select>
     <button id="load" class="primary">Load model</button>
   </div>
@@ -18,7 +21,8 @@
     <summary>System prompt</summary>
     <textarea id="system" rows="3">You are a helpful assistant.</textarea>
   </details>
-  <p class="note">Runs entirely in your browser on WebGPU; nothing is sent to a server. Weights download once and are cached by the browser, so later visits load much faster.</p>
+  <p class="note" id="cpunote" hidden>CPU mode (WebAssembly) is much slower than the GPU: expect a few tokens per second, and a first load of 500 MB+. <span id="threads"></span></p>
+  <p class="note">Runs entirely in your browser (WebGPU or WebAssembly); nothing is sent to a server. Weights download once and are cached by the browser, so later visits load much faster.</p>
 </header>
 <div id="nogpu" class="banner err" hidden></div>
 <div id="progress" hidden><div id="bar"><i></i></div><div id="ptext"></div></div>
